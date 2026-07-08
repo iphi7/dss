@@ -337,6 +337,7 @@ def simulate_market_gpu(
     # 1966年相当の初期値から出発し、株の状態 (当日リターン×レジーム) を見ながら生成する。
     gen_y = float(config.dgs10_init)      # 水準 (%)
     gen_dy = 0.0                          # 前日の変化 (スコア経路が参照)
+    gen_dy_exo = 0.0                      # 前日の変化の外生成分 (株由来項を除く)
     gen_drift = 0.0                       # 持続的ドリフト (インフレレジーム)
     gen_h = 1.0                           # 正規化分散状態 (|変化|クラスタ)
     gen_levels: list[float] = []          # トレンド窓用の水準履歴
@@ -482,8 +483,14 @@ def simulate_market_gpu(
         else:
             rate_kappa = 0.0
         if config.rate_change_score_beta != 0.0 and rate_kappa != 0.0:
+            # 生成モード + use_exo: 株由来項を除いた外生成分にのみ反応
+            # (株→金利→翌日スコア→株 のモメンタム合成ループを切る)
+            if config.generate_dgs10 and config.rate_score_use_exo:
+                dy_for_score = gen_dy_exo
+            else:
+                dy_for_score = dgs10_change
             score = score + (
-                config.rate_change_score_beta * rate_kappa * dgs10_change
+                config.rate_change_score_beta * rate_kappa * dy_for_score
                 * (rate_sens[:, None] / 0.10)
             )
 
@@ -794,18 +801,19 @@ def simulate_market_gpu(
                 * float(np.sqrt(np.clip(gen_h, 0.3, 4.0)))
             )
             z_rate = float(rng.standard_t(df=config.dgs10_df))
-            dy_new = (
+            dy_exo_part = (
                 gen_drift
                 + config.dgs10_mr_theta * (config.dgs10_mr_center - gen_y)
                 + sigma_t_rate * z_rate
-                + config.dgs10_stock_beta * rate_kappa * sp_ret_raw
             )
+            dy_new = dy_exo_part + config.dgs10_stock_beta * rate_kappa * sp_ret_raw
             dy_new = float(np.clip(dy_new, -config.dgs10_change_clip, config.dgs10_change_clip))
             new_y = float(np.clip(gen_y + dy_new, config.dgs10_min, config.dgs10_max))
             dy_new = new_y - gen_y
             gen_levels.append(gen_y)
             gen_y = new_y
             gen_dy = dy_new
+            gen_dy_exo = dy_exo_part
             gen_h = config.dgs10_vol_lambda * gen_h + (1.0 - config.dgs10_vol_lambda) * (z_rate ** 2)
             gen_drift = config.dgs10_drift_rho * gen_drift + rng.normal(0.0, config.dgs10_drift_sigma)
             # 記録は当日の生成値

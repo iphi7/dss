@@ -15,6 +15,7 @@ import argparse
 import importlib
 import json
 import sys
+import shutil
 from dataclasses import asdict
 from pathlib import Path
 
@@ -94,12 +95,14 @@ def main() -> None:
     # raw: モデルが通常生成する「2026年以後」の日付のまま保存。
     paths.to_csv(out_dir / "generated_paths_future_dates.csv", index=False)
 
-    # aligned: 歴史期間で重ねて見るため、Date と DGS10_abs を実データtailに揃える。
+    # aligned: 歴史期間で重ねて見るため Date は実データtailに揃える。
+    # ただし generate_dgs10=True のモデルでは DGS10 も生成対象なので上書きしない。
     aligned = paths.copy()
     aligned["Date"] = real_tail["Date"].to_numpy()
-    aligned["DGS10_abs"] = real_tail["DGS10_abs"].to_numpy()
-    if "DGS10" in aligned.columns:
-        aligned["DGS10"] = aligned["DGS10_abs"].diff().fillna(0.0)
+    if not getattr(config, "generate_dgs10", False):
+        aligned["DGS10_abs"] = real_tail["DGS10_abs"].to_numpy()
+        if "DGS10" in aligned.columns:
+            aligned["DGS10"] = aligned["DGS10_abs"].diff().fillna(0.0)
     aligned.to_csv(out_dir / "generated_paths.csv", index=False)
 
     firms.to_csv(out_dir / "firms.csv", index=False)
@@ -131,6 +134,7 @@ def main() -> None:
             ],
             check=True,
         )
+        shutil.copy2(out_png, out_dir / f"paths_overview_seed{args.seed}.png")
 
 
 if __name__ == "__main__":
