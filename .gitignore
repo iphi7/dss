@@ -1,0 +1,31 @@
+# Environment / editor / shell state outside the model code
+.cache/
+.claude/
+.codex/
+.config/
+.dotnet/
+.ipython/
+.local/
+.ssh/
+.vscode/
+.vscode-server/
+snap/
+
+# Python / notebook caches
+__pycache__/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.py[cod]
+
+# User/home dotfiles that are not part of the project
+.bash_history
+.bash_logout
+.bashrc
+.claude.json
+.gitconfig
+.lesshst
+.profile
+.wget-hsts
+.zshrc
