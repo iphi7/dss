@@ -257,6 +257,37 @@ class Config:
     rate_price_beta: float = 0.0
     # 経路B: 投資家スコア経由 — score += beta * kappa_t * (DGS10日次変化) * (感応度_i/0.10)
     rate_change_score_beta: float = 0.0
+    # 金利上昇トレンド補正: 実効水準 = 水準 + scale × max(1年前比の上昇, 0)。
+    # 2020s は水準が低い(4%台)のに相関ゼロなのは金利急上昇(インフレ)で
+    # 割引率チャネルが復活したため。1966-69 (低水準・上昇中・負相関) とも整合。
+    rate_trend_scale: float = 0.0
+    rate_trend_window: int = 250
+
+    # ===== DGS10 の内生生成 (Z系 Round27+) =====
+    # True にすると DGS10 を実データ入力でなくモデルで生成する。
+    # 実データの特性: 水準はほぼ単位根 (lag250自己相関0.92) + 数十年スケールの大波
+    # (4.6→15.8→0.5→4.5)、日次変化 std=0.067pp・尖度8.4、|変化|自己相関0.25 (ボラクラ)、
+    # ボラは水準の弱いべき乗 (gamma≈0.32)。
+    generate_dgs10: bool = False
+    dgs10_init: float = 4.63          # 初期水準 (%; 実データ1966年初と同じ既定)
+    dgs10_sigma0: float = 0.052       # 水準5%時の日次変化の基準スケール (pp)
+    dgs10_vol_gamma: float = 0.35     # ボラの水準べき指数
+    dgs10_df: float = 5.0             # 日次変化の t 分布自由度 (尖度源)
+    dgs10_vol_lambda: float = 0.95    # 分散状態 EWMA (|変化|クラスタの源)
+    # 持続的ドリフト = インフレレジーム。AR(1) で数年〜十年単位の上昇/下降期を作る
+    dgs10_drift_rho: float = 0.9995
+    dgs10_drift_sigma: float = 0.00008
+    # 弱い平均回帰と反射境界 (60年で発散/貼り付きしないように)
+    dgs10_mr_theta: float = 0.00002
+    dgs10_mr_center: float = 5.5
+    dgs10_min: float = 0.4
+    dgs10_max: float = 16.0
+    # 株→金利チャネル: 当日の株リターン × kappa を金利変化に加算 (pp / 単位リターン)。
+    # リスクオン期 (kappa>0) は株安→金利低下 (質への逃避)、高金利期は割引率チャネルの逆向き。
+    # 生成モードでは同日相関の主たる源 (株の取引後に当日の金利変化を生成する)。
+    dgs10_stock_beta: float = 0.0
+    # 金利変化の日次クリップ (実データ max |Δ|=0.75pp)
+    dgs10_change_clip: float = 0.9
     # 投資家母集団の層化抽出。True にすると wealth と vol_sensitivity を
     # 分位数グリッドから生成し (ペアリングのみ乱数)、母集団の抽出誤差を除去する。
     # iid 抽出では n=60 程度だと「大口リスク選好投資家 (クジラ)」の有無が seed 次第となり、

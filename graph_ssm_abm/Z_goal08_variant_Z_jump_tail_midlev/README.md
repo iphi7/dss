@@ -237,6 +237,24 @@ $$
 | `mega_triggers_episode` | 0.0 | メガクラッシュが災害エピソードを誘発する強度。1987型の暴落後乱高下を作り、孤立巨大 r² による sq_acf 希釈を防ぐ |
 | `jump_aftershock2_scale` / `_decay` | 0 / 0.96 | 遅い第2余震（2〜3週間スケール）。sq_acf の lag10-20 の持続源 |
 | `participation_noise_sigma` | 0.0 | 参加率への日次対数正規ノイズ。平常時の滑らかなボラ持続による \|r\| の lag1 自己相関過剰を希釈する |
+| `rate_regime_center` / `_width` | 4.5 / 1.5 | 株-金利相関のレジーム係数 $\kappa_t = \tanh((c-\tilde{y}_t)/w)$ の中心・幅（% 単位）。高金利で負（割引率チャネル）、低金利で正（リスクオン） |
+| `rate_trend_scale` / `_window` | 0 / 250 | 金利上昇トレンド補正。実効水準 $\tilde{y} = y + s\max(y-y_{-250},0)$。低水準でも急上昇中（インフレ）は負相関側へ |
+| `rate_change_score_beta` | 0.0 | 金利→株: スコアに $\beta\kappa_t\Delta y_{t-1}(g_i/0.10)$ を加算（centering 後）。$g_i$ は投資家の金利感応度 |
+| `rate_price_beta` | 0.0 | 金利→株の価格直接チャネル（leverage を希釈するため非推奨、比較用） |
+| `generate_dgs10` | False | DGS10 の内生生成。1966年初期値から株価と相互作用しながら日次逐次生成 |
+| `dgs10_init` / `_sigma0` / `_vol_gamma` / `_df` / `_vol_lambda` | 4.63 / 0.052 / 0.35 / 5 / 0.95 | 生成金利の初期値・基準日次ボラ・水準べき・t分布自由度・分散EWMA |
+| `dgs10_drift_rho` / `_drift_sigma` | 0.9995 / 8e-5 | 持続ドリフト（インフレレジーム）の AR(1)。数十年スケールの大波の源 |
+| `dgs10_mr_theta` / `_mr_center` / `_min` / `_max` | 2e-5 / 5.5 / 0.4 / 16 | 弱い平均回帰と反射境界 |
+| `dgs10_stock_beta` / `dgs10_change_clip` | 0 / 0.9 | 株→金利チャネル: $\Delta y \mathrel{+}= \beta_{sr}\kappa_t r_t$（当日株リターン、質への逃避）。同日相関の主たる源 |
+
+生成 DGS10 の日次変化の完全な形（記号は上表と本文の定義に従う）:
+
+$$
+\Delta y_t = d_t + \theta(c_{\mathrm{mr}} - y_{t-1}) + \sigma_0 \left(\frac{y_{t-1}}{5}\right)^{\gamma} \sqrt{h_t}\; T_{\nu,t} + \beta_{sr}\,\kappa_t\, r_t, \qquad
+d_t = \rho_d d_{t-1} + \varepsilon_t
+$$
+
+ここで $h_t = \lambda h_{t-1} + (1-\lambda)T_{\nu,t-1}^2$ は分散状態（金利のボラクラスタ）、$T_{\nu,t}$ は自由度 $\nu$ の t 分布乱数、$\varepsilon_t \sim \mathcal{N}(0,\sigma_d^2)$。処理順は「投資家が前日金利を見て取引 → 当日株リターン $r_t$ 確定 → 当日の $\Delta y_t$ を生成」で、金利→株（1日遅れ）と株→金利（同日）の双方向結合になる。
 | `obs_momentum_scale` | 1.0 | 公開観測の momentum 項スケール。0 で低分位 leverage の正相関アーティファクトを除去（市場アンカー弱体化と併用） |
 | `down_deadband` / `down_deadband_rel` | 0.0 | 下落記憶のデッドバンド。**非推奨** — 静穏期の発火燃料を遮断し市場が死ぬことを Round11-12 で確認 |
 | `asym_pi_threshold` | 1.0 | 非対称インパクトの活性化閾値。1未満で中位分位 leverage を強化 |

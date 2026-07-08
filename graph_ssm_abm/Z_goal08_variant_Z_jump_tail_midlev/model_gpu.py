@@ -333,9 +333,22 @@ def simulate_market_gpu(
     records      = []
     firm_records = []
 
+    # Z系: DGS10 内生生成の状態 (generate_dgs10=True のとき使用)
+    # 1966年相当の初期値から出発し、株の状態 (当日リターン×レジーム) を見ながら生成する。
+    gen_y = float(config.dgs10_init)      # 水準 (%)
+    gen_dy = 0.0                          # 前日の変化 (スコア経路が参照)
+    gen_drift = 0.0                       # 持続的ドリフト (インフレレジーム)
+    gen_h = 1.0                           # 正規化分散状態 (|変化|クラスタ)
+    gen_levels: list[float] = []          # トレンド窓用の水準履歴
+
     for t in range(t_max):
-        dgs10_abs    = float(historical_tail.loc[t, "DGS10_abs"])
-        dgs10_change = float(historical_tail.loc[t, "DGS10"])
+        if config.generate_dgs10:
+            # 当日の取引は前日終値の金利水準・前日の金利変化を見て行う
+            dgs10_abs    = gen_y
+            dgs10_change = gen_dy
+        else:
+            dgs10_abs    = float(historical_tail.loc[t, "DGS10_abs"])
+            dgs10_change = float(historical_tail.loc[t, "DGS10"])
         rf_level     = dgs10_abs / 100.0
 
         # ---- 真の状態遷移 (CPU numpy で生成、GPU へ転送) ----
@@ -452,10 +465,19 @@ def simulate_market_gpu(
 
         # Z系: レジーム依存の金利変化スコア (経路B)。
         # kappa_t は金利水準で符号が切り替わる (高金利=負/割引率チャネル、低金利=正/リスクオン)。
+        # rate_trend_scale > 0 なら金利急上昇局面 (インフレ) で実効水準を引き上げ、
+        # 低水準でも割引率チャネル側 (負) へ寄せる。
         # 全銘柄共通の項なので score_centering の後に加算する (centering で消えないように)。
         if config.rate_regime_center > 0.0:
+            level_eff = dgs10_abs
+            if config.rate_trend_scale > 0.0 and t >= config.rate_trend_window:
+                if config.generate_dgs10:
+                    dgs10_past = gen_levels[t - config.rate_trend_window]
+                else:
+                    dgs10_past = float(historical_tail.loc[t - config.rate_trend_window, "DGS10_abs"])
+                level_eff += config.rate_trend_scale * max(dgs10_abs - dgs10_past, 0.0)
             rate_kappa = float(np.tanh(
-                (config.rate_regime_center - dgs10_abs) / max(config.rate_regime_width, 1e-6)
+                (config.rate_regime_center - level_eff) / max(config.rate_regime_width, 1e-6)
             ))
         else:
             rate_kappa = 0.0
@@ -761,6 +783,34 @@ def simulate_market_gpu(
         # 記録・価格水準計算のみ補正済みリターンを使う。
         sp_ret      = sp_ret_raw + config.exog_drift
         sp_abs      = float(sp_abs * (1.0 + sp_ret))
+
+        # Z系: DGS10 の当日変化を生成 (株の取引後 — 当日の株リターンを見て金利が動く)。
+        # 構成: 持続ドリフト (インフレレジーム) + 弱い平均回帰 + 水準依存ボラ×クラスタ×t分布
+        #       + 株→金利チャネル (kappa×当日リターン; リスクオン期は株安→金利低下)
+        if config.generate_dgs10:
+            sigma_t_rate = (
+                config.dgs10_sigma0
+                * (max(gen_y, 0.5) / 5.0) ** config.dgs10_vol_gamma
+                * float(np.sqrt(np.clip(gen_h, 0.3, 4.0)))
+            )
+            z_rate = float(rng.standard_t(df=config.dgs10_df))
+            dy_new = (
+                gen_drift
+                + config.dgs10_mr_theta * (config.dgs10_mr_center - gen_y)
+                + sigma_t_rate * z_rate
+                + config.dgs10_stock_beta * rate_kappa * sp_ret_raw
+            )
+            dy_new = float(np.clip(dy_new, -config.dgs10_change_clip, config.dgs10_change_clip))
+            new_y = float(np.clip(gen_y + dy_new, config.dgs10_min, config.dgs10_max))
+            dy_new = new_y - gen_y
+            gen_levels.append(gen_y)
+            gen_y = new_y
+            gen_dy = dy_new
+            gen_h = config.dgs10_vol_lambda * gen_h + (1.0 - config.dgs10_vol_lambda) * (z_rate ** 2)
+            gen_drift = config.dgs10_drift_rho * gen_drift + rng.normal(0.0, config.dgs10_drift_sigma)
+            # 記録は当日の生成値
+            dgs10_abs = gen_y
+            dgs10_change = dy_new
 
         records.append({
             "path_id": 0,
