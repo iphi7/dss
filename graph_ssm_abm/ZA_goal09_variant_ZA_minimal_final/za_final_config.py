@@ -110,3 +110,39 @@ ZA_LEAN_PARAMS = dict(
     dgs10_stocktrend_beta=1.2,
     rate_lag_score_beta=0.3,
 )
+
+
+# ---- 長期記憶版 ZA-LEAN-LM (Round L): ACF全形状の改善 ----
+# ACF形状診断 (lag1だけ尖り lag20-60 の裾がない) への対応:
+#   - 第2余震の復活+持続化 (6, 0.985; 半減期46日) — SP500 の lag2-20
+#   - 金利の水準依存ボラ強化 (γ 0.35→0.85) — DGS10 |Δy| の全lag底上げ
+#     (副産物: dy_std=0.073, dy_kurt=7.5 が実データ水準に)
+#   - 投資家別ストレス記憶上限 0.988→0.995
+# 残: lag20-60 の裾は実データの55-60% (完全な長期記憶には多時間スケール
+# カスケードが必要 — オープン課題)。
+ZA_LEAN_LM_PARAMS = dict(
+    ZA_LEAN_PARAMS,
+    jump_aftershock2_scale=6.0,
+    jump_aftershock2_decay=0.985,
+    investor_stress_decay_max=0.995,
+    dgs10_vol_gamma=0.85,
+)
+
+
+# ---- 4課題対応版 ZA-FINAL3 (Round M/N/O): 終値・低分位leverage・極端相関 ----
+# ④ 終値バイアス: anchor_drift 0.00025→0.00034 (実成長7.7%へ、危機ドリフト込み校正)
+#    + パスごと確率ドリフト (σ=1e-6, 専用rng — 共有rngだと共通乱数法が壊れる)
+# ③ 低中分位leverage: down_linear_coef=0.6 (閾値なしの弱い線形応答の裾)
+#    → dec3/4 = -0.042/-0.042 (実 -0.041/-0.041)
+# ② 極端分位の相関: dgs10_episode_flight=3.5 — 危機エピソード中だけ正結合。
+#    レジーム符号付き増幅(N1)は「危機の時期配置がseed運」で不成立、
+#    エピソード限定flightが正解 (1987型: 高金利時代の暴落でも金利急落)
+# ① 中心質量: 未解決 (静穏フロアは exog+個別+粒度+参加ノイズの合成で
+#    単一ノブでは削れない)。P(|r|<0.2%)=0.15 vs 実0.23 — オープン課題
+ZA_FINAL3_PARAMS = dict(
+    ZA_LEAN_LM_PARAMS,
+    market_anchor_drift=0.00034,
+    market_anchor_drift_sigma=1e-6,
+    down_linear_coef=0.6,
+    dgs10_episode_flight=3.5,
+)

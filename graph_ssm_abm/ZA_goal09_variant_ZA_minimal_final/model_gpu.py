@@ -356,9 +356,16 @@ def simulate_market_gpu(
     aftershock_state = 0.0
     # ZA系: flight 持続状態 (株の極端日で点火し減衰。金利の flight 結合に使用)
     flight_state = 0.0
+    # ZA系: レジーム符号付き増幅の状態
+    amp_state = 0.0
     # ZA系: リードラグ用の履歴バッファ (株リターン・外生金利変化の直近20日)
     sp_ret_hist: list[float] = []
     dy_exo_hist: list[float] = []
+    # ZA系: アンカー成長率の確率ドリフト状態
+    # 専用rngを使用 — 共有rngから引くと以降の全乱数がずれ、
+    # 共通乱数法 (同一seedでの機構比較) が壊れるため。
+    anchor_drift_state = 0.0
+    anchor_rng = np.random.default_rng(config.seed + 990001)
     # Z系: 遅い第2余震状態 (2〜3週間スケール、sq_acf lag10-20 の持続源)。
     aftershock2_state = 0.0
     # Z系: 災害エピソード強度 (0 = 平常)。トリガーで 1.0、日次減衰。
@@ -383,6 +390,7 @@ def simulate_market_gpu(
     gen_dy_exo = 0.0                      # 前日の変化の外生成分 (株由来項を除く)
     gen_drift = 0.0                       # 持続的ドリフト (インフレレジーム)
     gen_h = 1.0                           # 正規化分散状態 (|変化|クラスタ)
+    gen_h2 = 1.0                          # 遅い第2分散状態 (長期記憶)
     gen_levels: list[float] = []          # トレンド窓用の水準履歴
 
     for t in range(t_max):
@@ -703,6 +711,13 @@ def simulate_market_gpu(
         else:
             current_common_sigma = config.exog_common_sigma
 
+        # ZA系: 日常共通ノイズの状態依存フロア (静穏期に下がる)
+        if config.exog_sigma_vol_coupling > 0.0:
+            _floor_mult = float(np.clip(
+                (prev_market_vol_t / (2.0 * config.market_vol)) ** config.exog_sigma_vol_coupling,
+                0.6, 1.5,
+            ))
+            current_common_sigma = current_common_sigma * _floor_mult
         # Z系: 余震 — 直近の大ジャンプが数日間、共通ノイズの標準偏差を増幅する。
         # 第2成分 (aftershock2) は 2〜3週間スケールで弱く持続する。
         _after_mult = 1.0
@@ -826,7 +841,12 @@ def simulate_market_gpu(
             fundamental_return = torch.zeros(n, device=device)
 
         if config.market_anchor_strength > 0.0:
-            market_fundamental_abs *= float(np.exp(config.market_anchor_drift))
+            if config.market_anchor_drift_sigma > 0.0:
+                anchor_drift_state = (
+                    config.market_anchor_drift_rho * anchor_drift_state
+                    + anchor_rng.normal(0.0, config.market_anchor_drift_sigma)
+                )
+            market_fundamental_abs *= float(np.exp(config.market_anchor_drift + anchor_drift_state))
             market_gap = np.log(max(market_fundamental_abs, 1e-12) / max(sp_abs, 1e-12))
             market_anchor_return = config.market_anchor_strength * np.tanh(market_gap / config.market_anchor_gap_scale)
             market_anchor_return = float(np.clip(market_anchor_return, -config.market_anchor_clip, config.market_anchor_clip))
@@ -862,13 +882,29 @@ def simulate_market_gpu(
                 * (max(gen_y, 0.5) / 5.0) ** config.dgs10_vol_gamma
                 * float(np.sqrt(np.clip(gen_h, 0.3, 4.0)))
             )
+            if config.dgs10_vol_lambda2 > 0.0:
+                sigma_t_rate *= float(np.sqrt(np.clip(gen_h2, 0.5, 2.5)))
             z_rate = float(rng.standard_t(df=config.dgs10_df))
             dy_exo_part = (
                 gen_drift
                 + config.dgs10_mr_theta * (config.dgs10_mr_center - gen_y)
                 + sigma_t_rate * z_rate
             )
-            stock_term = config.dgs10_stock_beta * rate_kappa * sp_ret_raw
+            # レジーム符号付き増幅: 極端週は kappa 結合が (1+amp×state) 倍
+            if config.dgs10_regime_amp > 0.0:
+                if abs(sp_ret_raw) > config.dgs10_amp_thresh * prev_market_vol_t:
+                    amp_state = 1.0
+                else:
+                    amp_state *= config.dgs10_amp_decay
+                amp_mult = 1.0 + config.dgs10_regime_amp * amp_state
+            else:
+                amp_mult = 1.0
+            stock_term = config.dgs10_stock_beta * amp_mult * rate_kappa * sp_ret_raw
+            # 危機エピソード限定 flight (kappa 非依存の正結合)
+            if config.dgs10_episode_flight > 0.0 and disaster_intensity > 0.0:
+                stock_term += (
+                    config.dgs10_episode_flight * min(disaster_intensity, 1.0) * sp_ret_raw
+                )
             # 極端日の flight-to-quality/relief (kappa 非依存・常に正の結合)
             if config.dgs10_flight_beta > 0.0:
                 thr = config.dgs10_flight_thresh * prev_market_vol_t
@@ -900,6 +936,8 @@ def simulate_market_gpu(
                 del sp_ret_hist[0]
                 del dy_exo_hist[0]
             gen_h = config.dgs10_vol_lambda * gen_h + (1.0 - config.dgs10_vol_lambda) * (z_rate ** 2)
+            if config.dgs10_vol_lambda2 > 0.0:
+                gen_h2 = config.dgs10_vol_lambda2 * gen_h2 + (1.0 - config.dgs10_vol_lambda2) * (z_rate ** 2)
             gen_drift = config.dgs10_drift_rho * gen_drift + rng.normal(0.0, config.dgs10_drift_sigma)
             # 記録は当日の生成値
             dgs10_abs = gen_y
@@ -954,12 +992,16 @@ def simulate_market_gpu(
         # 相対形 (down_deadband_rel × 実現ボラ) はレジームに適応する。
         _deadband = config.down_deadband + config.down_deadband_rel * prev_market_vol_t
         neg_ret = max(-sp_ret_raw - _deadband, 0.0)
+        # 閾値なしの弱い線形成分 (小さい下落の滑らかな応答の裾)
+        down_innov = neg_ret ** 2 + config.down_linear_coef * neg_ret * config.market_vol
         down_var_ewma = (
             config.down_ewma_decay * down_var_ewma
-            + (1.0 - config.down_ewma_decay) * neg_ret ** 2
+            + (1.0 - config.down_ewma_decay) * down_innov
         )
         if config.investor_stress_scale > 0.0:
-            stress_innov = config.investor_stress_scale * (neg_ret ** 2)
+            stress_innov = config.investor_stress_scale * (
+                neg_ret ** 2 + config.down_linear_coef * neg_ret * config.market_vol
+            )
             if stress_hetero:
                 investor_stress_state_t = (
                     stress_decay_i * investor_stress_state_t

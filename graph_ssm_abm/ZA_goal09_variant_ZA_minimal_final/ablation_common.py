@@ -59,6 +59,8 @@ def rolling_corr_metrics(df):
         'rc_pos_share': float((v > 0).mean()),
         'dy_std': float(dy.std()), 'dy_kurt': float(dy.kurt()),
         'ady_acf1': float(dy.abs().autocorr(1)),
+        **{f'dy_abs_acf{l}': float(dy.abs().autocorr(l)) for l in [2, 3, 5, 10, 20, 60]},
+        **{f'dy_sq_acf{l}': float((dy**2).autocorr(l)) for l in [1, 5, 20, 60]},
         'y_min': float(y.min()), 'y_max': float(y.max()),
         'y_acf250': float(y.autocorr(250)),
     }
@@ -165,12 +167,13 @@ def score(row, tgt):
 
 def aggregate(rows, label, tgt):
     out = {'label': label, 'n_samples': len(rows)}
-    keys = ['std_sp500', 'kurt_sp500',
+    keys = ['std_sp500', 'kurt_sp500', 'ann_return_approx',
             'r_acf1', 'abs_acf1', 'abs_acf5', 'abs_acf20', 'abs_acf60',
             'sq_acf1', 'sq_acf5', 'sq_acf20', 'sq_acf60',
             'abs_q099', 'abs_q0999', 'abs_q10',
             'corr_all', 'rc_q05', 'rc_q50', 'rc_q95', 'rc_pos_share',
             'dy_std', 'dy_kurt', 'ady_acf1', 'y_min', 'y_max', 'y_acf250',
+            'dy_abs_acf5', 'dy_abs_acf20', 'dy_abs_acf60', 'dy_sq_acf1', 'dy_sq_acf5', 'dy_sq_acf20',
             'ca_ext_lo', 'ca_ext_hi', 'ca_mid', 'ca_vshape', 'ca_dec20', 'ca_dec10', 'ca_hockey',
             'll_m7', 'll_0', 'll_p20', 'll_p45', 'll_asym']
     for d in [1, 10]:

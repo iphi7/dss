@@ -105,6 +105,11 @@ class Config:
     exog_common_jump_prob:  float = 0.006
     exog_common_jump_sigma: float = 0.035
     exog_common_clip:       float = 0.100
+    # 日常共通ノイズの状態依存化 (0=無効)。固定 sigma は静穏期のフロアになり、
+    # 実データの「究極に静かな時期」(rolling std 0.006) やリターン分布の
+    # 中心質量 (|r|<0.2% が23%) を再現できない。実現ボラへの緩いべき連動で
+    # 静穏期に sigma_c を下げる: sigma_c,t = sigma_c × clip((実現ボラ/2σ0)^c, 0.6, 1.5)
+    exog_sigma_vol_coupling: float = 0.0
     realized_vol_lambda:    float = 0.985
 
     garch_stress_scale: float = 0.0
@@ -236,6 +241,12 @@ class Config:
     # 現在のボラ水準に適応する相対形が正しい。
     # → Round12 で相対形も発火と両立しないことを確認。非推奨。
     down_deadband_rel: float = 0.0
+    # 下落記憶の閾値なし線形成分 (0=無効)。leverage機構 (asym_pi/ストレス) は
+    # neg² と閾値で「意味のある下落」だけに反応するため、低中ボラ分位の
+    # 小さな下落→将来ボラの滑らかな応答の裾が構造的にゼロになる。
+    # down_var とストレスの蓄積に + coef×neg×market_vol の線形項を併設する
+    # (小さい neg では neg² に匹敵、大きい neg では無視できる)。
+    down_linear_coef: float = 0.0
     # 公開観測の momentum 項のスケール (1.0 = 従来)。低分位 leverage の正相関の
     # 原因切り分け用: 正リターン → momentum で観測強気 → 買い活動増 → ボラ増、
     # という上昇側チャネルを弱められる。
@@ -291,6 +302,9 @@ class Config:
     dgs10_vol_gamma: float = 0.35     # ボラの水準べき指数
     dgs10_df: float = 5.0             # 日次変化の t 分布自由度 (尖度源)
     dgs10_vol_lambda: float = 0.95    # 分散状態 EWMA (|変化|クラスタの源)
+    # 遅い第2分散成分 (0=無効)。実データの |Δy| は lag60 まで平坦な長期記憶を持ち、
+    # 単一の速い EWMA では再現できない。月〜年スケールの第2成分を乗算合成する。
+    dgs10_vol_lambda2: float = 0.0
     # 持続的ドリフト = インフレレジーム。AR(1) で数年〜十年単位の上昇/下降期を作る
     dgs10_drift_rho: float = 0.9995
     dgs10_drift_sigma: float = 0.00008
@@ -314,6 +328,19 @@ class Config:
     # (実データの flight は危機週全体で株安→金利低下が続くエピソード現象。
     #  単日の超過分だけの結合では7日窓相関の極端分位に現れない)。
     dgs10_flight_decay: float = 0.0
+    # レジーム符号付き増幅 (0=無効)。極端日 (|r| > amp_thresh×実現ボラ) で点火し
+    # amp_decay で減衰する状態の間、株→金利結合を (1 + amp×state) 倍にする。
+    # 旧 flight (常に正) の修正版: 実データは時代内で「高ボラほどその時代の
+    # レジーム相関が増幅」(負時代 d20=-0.39、正時代 d20=+0.55) するため、
+    # kappa の符号を保ったまま結合強度だけ増幅するのが正しい構造。
+    dgs10_regime_amp: float = 0.0
+    dgs10_amp_thresh: float = 2.0
+    dgs10_amp_decay: float = 0.80
+    # 危機エピソード限定の flight (0=無効)。disaster_intensity > 0 の間だけ
+    # 当日リターンに正結合 (レジームによらず暴落週は株安→金利低下)。
+    # 1987 (高金利時代の暴落でも金利急落) に対応。通常の高ボラ日は
+    # レジーム相関のままなので、時代内の負の増幅と両立する。
+    dgs10_episode_flight: float = 0.0
     # ===== リードラグ (ZA系 フェーズ3) =====
     # 株トレンド→金利ドリフト (景気期待): 株の20日平均リターンを金利が遅れて追う。
     # 実データの「株先行の正相関 (+20〜45日ラグで+0.10)」に対応。
@@ -371,6 +398,11 @@ class Config:
     # 市場全体の長期ファンダメンタル指数アンカー。
     # 個別企業ではなくSP500水準そのものの崩壊/爆発を抑える弱い復元力。
     market_anchor_strength: float = 0.0
+    # ZA系: アンカー成長率のパスごと確率ドリフト (0=無効)。
+    # 決定論的アンカーは全seedの終値を±15%に束ねる。持続AR(1)のドリフト変動で
+    # パスごとの長期軌道の多様性を作る (金利のインフレレジームと同じ構造)。
+    market_anchor_drift_sigma: float = 0.0
+    market_anchor_drift_rho: float = 0.9995
     market_anchor_gap_scale: float = 0.70
     market_anchor_clip: float = 0.004
     market_anchor_drift: float = 0.00025
