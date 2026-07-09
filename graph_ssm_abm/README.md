@@ -1,173 +1,175 @@
-# Graph-SSM ABM MVP
+# graph_ssm_abm — 企業ネットワーク × 投資家エージェントによる市場パス生成
 
-LLMを使わず、企業ネットワーク上の潜在状態伝播と、投資家ごとの主観グラフに基づく状態推定から、S&P500型の指数パスを生成するMVP。
+企業ネットワーク上の潜在状態伝播と、異質な投資家エージェントのミクロな売買から、
+SP500 と DGS10（米10年金利）の日次パスを **60年分（14,882営業日）共生成**する
+エージェントベースモデル。LLM は使わない。外部入力は初期値のみ
+（実データは校正・評価の参照としてのみ使用）。
+
+## 到達点（2026-07 時点）
+
+| モデル | 場所 | 特徴 |
+|---|---|---|
+| **Z117** | `Z_goal08_variant_Z_jump_tail_midlev/` | 30ラウンドの検証で確定した基準モデル |
+| **ZA-final v2** | `ZA_goal09_variant_ZA_minimal_final/` | Z117 から冗長6機構を除去した簡素化版（同等性能） |
+| **ZA-scalable** | 同上（`ZA_SCALABLE_PARAMS`） | 投資ユニバース制限によりスケール可変（×1〜×2 で不変） |
+
+主要スタイライズドファクトの再現状況（ZA 系、seed 3本平均 vs 実データ 1966-2026）:
+
+| 指標 | モデル | 実データ |
+|---|---:|---:|
+| 日次リターン std | 0.011〜0.012 | 0.0105 |
+| 尖度 | 18〜20 | 21.8 |
+| 絶対リターン自己相関（lag1） | 0.27〜0.29 | 0.26 |
+| 二乗リターン自己相関（lag1/5） | 0.24/0.17 | 0.23/0.23 |
+| 裾分位点 q99.9% | 0.070〜0.076 | 0.070 |
+| 最大日次変動 | ≈0.2（60年に1回級） | 0.205 |
+| leverage（最上位分位・5日） | −0.19〜−0.21 | −0.209 |
+| 株金利90日相関の q05/q95 | −0.55/+0.51 | −0.57/+0.58 |
+| 金利水準レンジ（60年） | 1〜15% | 0.5〜15.8% |
+
+詳細な数式は `Z_goal08_variant_Z_jump_tail_midlev/Z117_モデル詳細.md`、
+検証の全経緯は各ディレクトリの `検証レポート.md` を参照。
+
+---
 
 ## モデル概要
 
-真の企業ネットワークを $G=(V,E)$、正規化隣接行列を $W$ とする。企業潜在状態 $x_t\in\mathbb{R}^N$ は
+### 1. 企業ネットワークと潜在状態
+
+企業 $j = 1, \ldots, n$（基準 $n = 80$、8セクター）は Barabási–Albert グラフ上に配置される。
+行正規化した隣接行列を $W$、企業 $j$ の潜在状態を $x_{j,t} \in \mathbb{R}^{D}$（$D = 20$:
+公開6・セクター8・非公開6次元）とし、次元 $m$ ごとに AR(1) + ネットワーク伝播で遷移する:
 
 $$
-x_{t+1}
-=
-\phi x_t
-+ \rho W x_t
-+ \eta_t
+x_{j,t,m} = \phi_m x_{j,t-1,m} + \rho_m \sum_{k=1}^{n} W_{jk} x_{k,t-1,m} + \eta_{j,t,m}, \qquad \eta_{j,t,m} \sim \mathcal{N}(0, \sigma_{\eta,m}^2)
 $$
 
-で伝播する。観測されるIR情報・ニュースシグナルは
+公開・セクター次元のみ観測ノイズ付きで観測され、非公開次元は観測できない。
+
+### 2. 投資家の信念と売買
+
+投資家 $i = 1, \ldots, N$（基準 $N = 60$）は真の $W$ でなく**欠損した主観グラフ** $W_i$
+（専門セクターの辺を高確率で保持 + 偽辺）を持ち、信念 $b_{i,j,t,m}$ を予測と観測のブレンドで更新する:
 
 $$
-y_t = Hx_t + \epsilon_t
+b_{i,j,t,m} = (1 - \alpha_{i,j,m}) \left( \phi^{b}_i b_{i,j,t-1,m} + \rho^{b}_{i,m} \sum_{k=1}^{n} (W_i)_{jk} b_{i,k,t-1,m} \right) + \alpha_{i,j,m} y_{j,t,m}
 $$
 
-で与える。このMVPでは $H=I$ とする。
+ここで $y_{j,t,m}$ は観測、$\alpha_{i,j,m}$ は専門性に依存する更新率。信念から売買スコアを作り、
+温度付きオッズで確率的に売買する。参加率は実現ボラへの感応（リスク選好/回避の異質性）と
+下落ストレス記憶（投資家別の記憶長）で変動する。母集団は**層化抽出**
+（資産とボラ感応度を分位数グリッドから生成）で、有限サンプルの「クジラガチャ」を除去している。
 
-投資家 $i$ は、真の $W$ ではなく欠損した主観ネットワーク $W_i$ を持つ。
+**投資ユニバース**（ZA-scalable）: 各投資家は「専門セクター全社 + グラフ隣接 + ランダム5社
+（上限36社）」のみを取引する。銘柄あたり参加者数がスケールによらず一定（≈26人）になり、
+後述の粒度ノイズが保存される。
 
-$$
-\tilde{E}_i \subseteq E
-$$
+### 3. 価格形成
 
-投資家は主観モデル
-
-$$
-\hat{x}^{(i)-}_t = A_i \hat{x}^{(i)}_{t-1},
-\qquad
-A_i = \phi_i I + \rho_i W_i
-$$
-
-に基づいて予測し、観測 $y_t$ を見て対角近似カルマンフィルタで更新する。
+企業リターンは注文不均衡・共通ショック・個別ノイズ・アンカーの和:
 
 $$
-K^{(i)}_{j,t}
-=
-\frac{P^{(i)-}_{j,t}}
-{P^{(i)-}_{j,t} + R_i}
+r_{j,t} = \lambda F_t I_{j,t} + c_t + \epsilon_{j,t} + A_t, \qquad I_{j,t} = \frac{B_{j,t} - S_{j,t}}{B_{j,t} + S_{j,t} + \varepsilon}
 $$
 
-$$
-\hat{x}^{(i)}_{j,t}
-=
-\hat{x}^{(i)-}_{j,t}
-+ K^{(i)}_{j,t}
-\left(
-y_{j,t}-\hat{x}^{(i)-}_{j,t}
-\right)
-$$
+- $I_{j,t}$: 注文不均衡（$B$ = 買い金額、$S$ = 売り金額）、$\lambda$: 価格インパクト
+- $F_t$: インパクト増幅（取引活動 × **非対称インパクト** — 下落記憶の超過に tanh 飽和で応答し、leverage effect の分位構造を作る）
+- $A_t$: 指数水準の弱いアンカー（60年での価格崩壊防止）
 
-投資家の売買スコアは
+指数は時価総額加重 $r_t = \sum_j w_{j,t} r_{j,t}$。
+
+### 4. 共通ショックの階層（尖度・裾・ボラクラスタの源）
 
 $$
-s_{i,j,t}
-=
-a_i\hat{x}^{(i)}_{j,t}
-+ b_i\Delta \hat{x}^{(i)}_{j,t}
-- c_i \sqrt{P^{(i)}_{j,t}}
-- d_i r^f_t
-+ e_i m_{j,t}
+c_t = \mathrm{clip}\left( \zeta_t + J^{(2)}_t + J^{\mathrm{dis}}_t + J^{\mathrm{mega}}_t, \ -0.24, \ 0.24 \right)
 $$
 
-で定義する。ここで $m_{j,t}$ は直近モメンタム、$r^f_t$ はDGS10水準である。
+- $\zeta_t$: 日常ノイズ（**余震**状態が標準偏差を増幅 — ジャンプ後数日の高ボラ）
+- $J^{(2)}_t$: 中規模ジャンプ（年約3回、t分布）
+- $J^{\mathrm{dis}}_t$: **災害エピソード** — 強度がプラトー（約10日）ののち幾何減衰する複数日クラッシュ。日次ショックに負の平均シフトを持ち（危機週は net 下落）、二乗リターンの自己相関と最上位分位 leverage の主要な源
+- $J^{\mathrm{mega}}_t$: メガクラッシュ（60年に約1回、単日 −18% 級、負符号固定）
 
-buy / hold / sell 確率は
+### 5. DGS10 の内生生成と株との双方向結合
 
-$$
-p^{buy}_{i,j,t}
-=
-\frac{\exp(\tau_i s_{i,j,t})}
-{\exp(\tau_i s_{i,j,t})+1+\exp(-\lambda_i\tau_i s_{i,j,t})}
-$$
+金利は1966年の初期値（4.63%）から株価と相互作用しながら日次で生成される:
 
 $$
-p^{sell}_{i,j,t}
-=
-\frac{\exp(-\lambda_i\tau_i s_{i,j,t})}
-{\exp(\tau_i s_{i,j,t})+1+\exp(-\lambda_i\tau_i s_{i,j,t})}
+\Delta y_t = d_t + \theta (c_{\mathrm{mr}} - y_{t-1}) + \sigma_t T_{\nu, t} + \beta_{sr} \kappa_t r_t
 $$
 
-$$
-p^{hold}_{i,j,t}
-=
-\frac{1}
-{\exp(\tau_i s_{i,j,t})+1+\exp(-\lambda_i\tau_i s_{i,j,t})}
-$$
+- $d_t$: 持続的ドリフト（AR(1)、記憶約8年）— 数十年スケールの金利大波（インフレレジーム）の源
+- $\theta (c_{\mathrm{mr}} - y_{t-1})$: 弱い平均回帰（$c_{\mathrm{mr}} = 5.5$%）
+- $\sigma_t$: 水準依存ボラ × 分散クラスタ、$T_{\nu,t}$ は自由度 $\nu$ の t 分布乱数
+- $\beta_{sr} \kappa_t r_t$: **株→金利チャネル**（当日の株リターンに応答。同日相関の源）
 
-で与える。 $\lambda_i>1$ のとき、悪材料に対する売り反応が買い反応より強くなる。
-
-銘柄リターンは注文不均衡、企業潜在状態、市場共通ショック、個別ノイズから
+レジーム係数は金利水準で符号が切り替わる:
 
 $$
-r_{j,t+1}
-=
-\kappa I_{j,t}
-+ \beta_x x_{j,t}
-+ c_t
-+ \sigma_{j,t}\xi_{j,t}
+\kappa_t = \tanh\left( \frac{c - y_{t-1}}{w} \right), \qquad c = 5.5, \quad w = 1.5
 $$
 
-$$
-I_{j,t}
-=
-\frac{B_{j,t}-S_{j,t}}
-{B_{j,t}+S_{j,t}+\epsilon}
-$$
+（高金利 = 割引率チャネルで負相関、低金利 = リスクオンで正相関）。投資家スコアには
+$\kappa_t \Delta y^{\mathrm{exo}}_{t-1}$（**株由来項を除いた外生成分**）が入る —
+全成分に反応させると「株→金利→翌日スコア→株」の往復がリターンの自己相関を合成してしまうため。
+これにより実データの「1966-97 負 / 2000-19 正 / 2020s ゼロ近傍」というレジーム構造の分布が再現される。
 
-で更新する。ここで $c_t$ は市場共通ショックであり、GARCH型の市場分散から生成する。
+---
 
-$$
-v_t
-=
-(1 - \alpha_m - \beta_m)b_t
-+ \alpha_m c_{t-1}^2
-+ \beta_m v_{t-1}
-+ \ell_m \max(-c_{t-1},0)^2
-$$
+## 検証で得られた主要な知見
+
+1. **内生ボラの源は有限 $N$ の粒度ノイズ**: 不均衡のゆらぎは
 
 $$
-c_t = \sigma^m_t z_t,
-\qquad
-\sigma^m_t = \sqrt{v_t}
+\mathrm{sd}(I_j) \approx \frac{\kappa_s}{\sqrt{2\bar{p}}} \sqrt{H}, \qquad H = \frac{\sum_i w_i^2}{\left( \sum_i w_i \right)^2}
 $$
 
-$$
-b_t
-=
-(\bar{\sigma}^m)^2
-\left(
-1 + a_s\,\mathrm{stress}_t
-+ a_d\,\mathrm{downside}_t
-\right)
-$$
+   （$H$ = 参加者の注文規模の Herfindahl、$\bar{p}$ = 平均売買確率、$\kappa_s$ = サイズノイズ係数。
+   実効投資家数 $1/H \approx 19$ 人）。投資家を増やすと粒度が縮み内生ボラが死ぬ
+   （スケール非不変）— 投資ユニバース制限で銘柄あたり参加者数を固定することで解決した
 
-この項により、指数全体に残る共通ショックとボラティリティクラスタリングを表現する。
+2. **危機の構造が本体**: 尖度・二乗自己相関・最上位分位 leverage は「複数日エピソード +
+   プラトー + 負ドリフト」が担う。単日の巨大ジャンプは $r^2$ の分散を支配して逆に自己相関を殺す
 
-指数リターンは時価総額ウェイトで
+3. **グラフ構造・欠損グラフは主要指標に load-bearing ではない**: 全除去/完全知識化でも
+   ヘッドライン指標はほぼ不変（低分位 leverage の微細構造にのみ痕跡）。グラフの役割は
+   ユニバース設計（誰がどの銘柄を見るか）を通じて残る
 
-$$
-r^{SP}_{t+1}
-=
-\sum_j \omega_{j,t}r_{j,t+1}
-$$
+4. **レジーム転換はパラメータでなく状態から**: 株金利相関の符号転換は金利水準の関数 $\kappa_t$
+   で内生的に生成される（レジームの持続・転換タイミングは金利パスが決める）
 
-として集計する。
+5. **60年カオス系のノイズフロア**: ほぼ無効な機構の除去でも評価スコアが ±0.01 揺れる
+   （バタフライ効果）。これ未満の差は判定不能
 
-## 使い方
+## ディレクトリ案内
+
+| ディレクトリ | 内容 |
+|---|---|
+| `Z_goal08_variant_Z_jump_tail_midlev/` | 基準モデル Z117 の開発（Round1-30）。`Z117_モデル詳細.md` に全数式 |
+| `ZA_goal09_variant_ZA_minimal_final/` | アブレーション・簡素化・スケール不変化。`za_final_config.py` に確定パラメータ3種 |
+| `R_base7_...` / `X_goal06_...` / `Y_goal07_...` | 先行系列（ACF制御・decile leverage・投資家レジーム） |
+| `A_variant_A_...` 〜 `Q_base6_...` | 初期〜中期の検証系列（カルマン廃止、pub/priv 分離、多次元化等） |
+| `問題点.md` | 問題点・仮説・設計論点の蓄積（§1〜22） |
+| `DIRECTORY_NAMING.md` | 命名規則と新旧対応 |
+
+## 実行方法
 
 ```bash
-python -m graph_ssm_abm.run
+cd /home/u00121
+.venv/bin/python - << 'EOF'
+import sys; sys.path.insert(0, 'graph_ssm_abm/ZA_goal09_variant_ZA_minimal_final')
+import pandas as pd, torch
+from model import Config
+from model_gpu import simulate_market_gpu
+from za_final_config import ZA_SCALABLE_PARAMS  # or ZA_FINAL_V2_PARAMS
+
+hist = pd.read_csv('output.csv')  # 校正参照 (DGS10生成モードでは初期値のみ使用)
+cfg = Config(**ZA_SCALABLE_PARAMS, seed=1, n_days=14882)
+gen, firms, investors, aux = simulate_market_gpu(hist, cfg, device=torch.device('cuda'))
+gen.to_csv('generated_paths.csv', index=False)
+EOF
 ```
 
-生成物は `graph_ssm_abm/results/` に保存される。
-
-- `generated_paths.csv`  
-  `path_id,Date,sp500_abs,DGS10_abs,sp500,DGS10`
-- `generated_path_output_format.csv`  
-  `output.csv` と同じ `Date,sp500_abs,DGS10_abs,sp500,DGS10`
-- `stylized_facts_summary.csv`
-- `firms.csv`
-- `investors.csv`
-- `config.json`
-
-## 注意
-
-DGS10は実データ `output.csv` の末尾5年分を流用し、日付だけ生成期間に合わせて付け替える。
+出力列: `Date, sp500_abs, DGS10_abs, sp500, DGS10`。
+評価は `stylized_facts_analysis.ipynb`（実データ比較）または
+`ZA_goal09_variant_ZA_minimal_final/ablation_common.py` の指標群を使用。
+60年1本 ≈ 55秒（Quadro RTX 5000）。

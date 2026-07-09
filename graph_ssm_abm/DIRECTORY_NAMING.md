@@ -60,3 +60,5 @@ variant_A_observation_uncertainty -> A_variant_A_observation_uncertainty
 | `X_goal06_variant_X_R_issue_fix` | Rをベースにdecile10多日leverage + multi-lag ACF問題を改善する目標ディレクトリ |
 
 | `Y_goal07_variant_Y_investor_regime` | 投資家ヘテロ性による中期ストレス反応を導入する目標ディレクトリ |
+| `Z_goal08_variant_Z_jump_tail_midlev` | ジャンプ2階層・中位分位leverage・DGS10内生生成 (Round1-30, 最終候補Z117) |
+| `ZA_goal09_variant_ZA_minimal_final` | Z117ベースのアブレーションで簡潔な最終モデルを作る目標ディレクトリ |
