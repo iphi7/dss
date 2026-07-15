@@ -1,0 +1,12 @@
+device=cuda n_days=14882 init_sp=92.8500 init_dg=4.6300
+generating seed01
+generating seed02
+generating seed03
+generating seed04
+generating seed05
+generating seed06
+generating seed07
+generating seed08
+generating seed09
+generating seed10
+DONE /home/u00121/graph_ssm_abm/ZA_goal09_variant_ZA_minimal_final/results_fix5_3/S01_final/histinit

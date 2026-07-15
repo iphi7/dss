@@ -111,12 +111,40 @@ class Config:
     # 静穏期に sigma_c を下げる: sigma_c,t = sigma_c × clip((実現ボラ/2σ0)^c, 0.6, 1.5)
     exog_sigma_vol_coupling: float = 0.0
     realized_vol_lambda:    float = 0.985
+    realized_vol_anchor:      float = 0.011   # ボラEWMAの固定アンカー(日次vol)
+    realized_vol_anchor_pull: float = 0.0     # >0 で平穏ボラ床の経年ラチェットを抑制
+
+    # 投資家の資本回転 (参入・退出)。富の凝縮 (wealth condensation) を防ぐ。
+    # 各投資家に幾何分布のランダム残存寿命を与え (staggered)、交代時に
+    # 富を市場スケールの新規資本へリセット + 行動パラメータを再ドローする。
+    investor_turnover_mean_years: float = 0.0   # 0 = 無効。例 20 で年率5%が交代
+    investor_entry_cash_frac:     float = 1.0   # 参入現金 = frac × 現金中央値 × lognormal
+    investor_exit_liq_days:       float = 63.0  # 退出者の段階的清算日数 (即時消滅は
+                                                # 売り供給の瞬間蒸発でバブルを誘発する)
+    # キャパシティ制約 (大口の執行制約): 注文サイズ ×= (富シェア×n_inv)^(-γ)。
+    # 平均以下の投資家は不変。巨大化した投資家ほど富の小さい割合しか日々動かさない
+    # (実市場の大規模ファンドと同じ)。富の凝縮の市場支配と複利加速の両方を抑える。
+    whale_size_power: float = 0.0               # γ (買い側)。0 = 無効
+    # 売り側のγ。負なら買い側と同値。実市場では平時の執行制約は両側に効くが、
+    # 危機のファイアセールで大口は大量に投げる — この非対称が leverage 効果の
+    # 増幅源なので、売り側を緩めると γ 導入で失われた leverage を取り戻せる。
+    whale_size_power_sell: float = -1.0
+    # 状態依存ファイアセール: 下方ストレス (down_var/(realized_var/2)) が
+    # whale_fire_thresh を超えるほど売りγを緩める (γ_sell_eff = γ_sell×(1-relief×fire01))。
+    # 常時解放 (sell γ=0) は leverage を完全復元するが床ラチェットも復活する —
+    # 危機時限定なら平時のラチェット抑制と暴落増幅を両立できる。
+    whale_fire_sale_relief: float = 0.0   # 0..1。0 = 無効
+    whale_fire_thresh: float = 1.0        # fire01 = clip((ratio-thresh)/width, 0, 1)
+    whale_fire_width: float = 0.6
 
     garch_stress_scale: float = 0.0
     garch_down_scale:   float = 0.3
 
     vol_sensitivity_mean: float = 0.80
     vol_sensitivity_std:  float = 0.80
+
+    trend_weight_mean:    float = 0.28
+    trend_weight_std:     float = 0.12
 
     wealth_sigma:          float = 1.20
     wealth_vol_corr:       float = 1.20
@@ -443,6 +471,8 @@ def make_subjective_graphs(
     rng: np.random.Generator,
     vol_sensitivity_mean: float = 0.80,
     vol_sensitivity_std:  float = 0.80,
+    trend_weight_mean: float = 0.28,
+    trend_weight_std: float = 0.12,
 ) -> tuple[np.ndarray, pd.DataFrame]:
     n = true_w.shape[0]
     graphs = np.zeros((n_investors, n, n), dtype=float)
@@ -473,7 +503,7 @@ def make_subjective_graphs(
             "edge_keep_base": base_keep,
             "risk_tolerance": rng.lognormal(mean=-2.6, sigma=0.35),
             "vol_sensitivity": vol_sens,
-            "trend_weight": rng.normal(0.28, 0.12),
+            "trend_weight": rng.normal(trend_weight_mean, trend_weight_std),
             "value_weight": rng.normal(1.00, 0.25),
             "uncertainty_aversion": rng.uniform(0.15, 0.75),
             "rate_sensitivity": rng.uniform(0.02, 0.18),
@@ -527,6 +557,8 @@ def simulate_market(
         true_w, sectors, config.n_investors, rng,
         vol_sensitivity_mean=config.vol_sensitivity_mean,
         vol_sensitivity_std=config.vol_sensitivity_std,
+        trend_weight_mean=config.trend_weight_mean,
+        trend_weight_std=config.trend_weight_std,
     )
     if config.graph_topology == "zero":
         subjective_graphs[:] = 0.0

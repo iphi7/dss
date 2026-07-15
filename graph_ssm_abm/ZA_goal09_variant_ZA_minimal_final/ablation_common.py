@@ -103,6 +103,37 @@ def corr_asym_metrics(df):
     return out
 
 
+def center_drawdown_metrics(df):
+    """① 中心質量、週次/月次の累積下落 (危機の深さ)、
+    12ヶ月の暴騰/暴落 (バブルの規模と頻度)、平穏ボラ床の経年ドリフト。"""
+    r = df['sp500'].astype(float).to_numpy()
+    a = np.abs(r)
+    lr = np.log1p(np.clip(r, -0.999, None))
+    c5 = pd.Series(lr).rolling(5).sum()
+    c21 = pd.Series(lr).rolling(21).sum()
+    # 12ヶ月(252営業日)の変化率 = 増分/元の値
+    lvl = df['sp500_abs'].astype(float).reset_index(drop=True)
+    r252 = (lvl / lvl.shift(252) - 1.0).dropna()
+    # 平穏ボラ床の経年ドリフト: 21d rolling std の q25 を前半/後半で比較
+    rs21 = pd.Series(r).rolling(21).std()
+    half = len(rs21) // 2
+    floor_early = float(rs21.iloc[:half].quantile(0.25))
+    floor_late = float(rs21.iloc[half:].quantile(0.25))
+    return {
+        'p_lt001': float(np.mean(a < 0.001)),
+        'p_lt002': float(np.mean(a < 0.002)),
+        'p_lt005': float(np.mean(a < 0.005)),
+        'worst_5d': float(np.exp(c5.min()) - 1.0),
+        'worst_21d': float(np.exp(c21.min()) - 1.0),
+        'max_12m_up': float(r252.max()),
+        'max_12m_dn': float(r252.min()),
+        'freq_12m_gt50': float((r252 > 0.50).mean()),
+        'vol_floor_early': floor_early,
+        'vol_floor_late': floor_late,
+        'vol_floor_drift': float(floor_late / max(floor_early, 1e-9)),
+    }
+
+
 def metric_row(df, label):
     r = summarize_stylized_facts(df, label)
     sp = df['sp500'].astype(float).to_numpy()
@@ -123,6 +154,7 @@ def metric_row(df, label):
         r[f'lev_mid_{w}d'] = float(np.nanmean(vals))
     r.update(rolling_corr_metrics(df))
     r.update(corr_asym_metrics(df))
+    r.update(center_drawdown_metrics(df))
     return r
 
 
@@ -175,7 +207,10 @@ def aggregate(rows, label, tgt):
             'dy_std', 'dy_kurt', 'ady_acf1', 'y_min', 'y_max', 'y_acf250',
             'dy_abs_acf5', 'dy_abs_acf20', 'dy_abs_acf60', 'dy_sq_acf1', 'dy_sq_acf5', 'dy_sq_acf20',
             'ca_ext_lo', 'ca_ext_hi', 'ca_mid', 'ca_vshape', 'ca_dec20', 'ca_dec10', 'ca_hockey',
-            'll_m7', 'll_0', 'll_p20', 'll_p45', 'll_asym']
+            'll_m7', 'll_0', 'll_p20', 'll_p45', 'll_asym',
+            'p_lt001', 'p_lt002', 'p_lt005', 'worst_5d', 'worst_21d',
+            'max_12m_up', 'max_12m_dn', 'freq_12m_gt50',
+            'vol_floor_early', 'vol_floor_late', 'vol_floor_drift']
     for d in [1, 10]:
         for w in LEV_WINDOWS:
             keys.append(f'lev_dec{d}_{w}d')

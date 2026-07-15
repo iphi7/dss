@@ -29,6 +29,8 @@ def _make_subjective_graphs_gpu(
     vol_sensitivity_mean: float,
     vol_sensitivity_std: float,
     device: torch.device,
+    trend_weight_mean: float = 0.28,
+    trend_weight_std: float = 0.12,
 ) -> tuple[torch.Tensor, pd.DataFrame]:
     """主観グラフを生成し GPU テンソルで返す。投資家属性は DataFrame で返す。"""
     n = true_w.shape[0]
@@ -60,7 +62,7 @@ def _make_subjective_graphs_gpu(
             "edge_keep_base": base_keep,
             "risk_tolerance": rng.lognormal(mean=-2.6, sigma=0.35),
             "vol_sensitivity": vol_sens,
-            "trend_weight": rng.normal(0.28, 0.12),
+            "trend_weight": rng.normal(trend_weight_mean, trend_weight_std),
             "value_weight": rng.normal(1.00, 0.25),
             "uncertainty_aversion": rng.uniform(0.15, 0.75),
             "rate_sensitivity": rng.uniform(0.02, 0.18),
@@ -126,6 +128,8 @@ def simulate_market_gpu(
         vol_sensitivity_mean=config.vol_sensitivity_mean,
         vol_sensitivity_std=config.vol_sensitivity_std,
         device=device,
+        trend_weight_mean=config.trend_weight_mean,
+        trend_weight_std=config.trend_weight_std,
     )
     if config.graph_topology == "zero":
         subjective_graphs = torch.zeros_like(subjective_graphs)
@@ -323,6 +327,19 @@ def simulate_market_gpu(
     if universe_mask is not None:
         # 初期保有もユニバース内に限定 (外の株は最初から持たない)
         holdings = holdings * universe_mask
+
+    # 投資家の資本回転 (参入・退出)。富の凝縮 (60年で実効投資家数が1人に崩壊し
+    # 金額imbalanceが飽和→内生ボラ床が経年上昇) を防ぐ。
+    # 幾何寿命 (memoryless) なので毎日一定確率での交代と等価 = staggered。
+    # 専用rng (seed+770001): 共有rngから引くと共通乱数法が壊れる (M3の教訓)。
+    turnover_rng = np.random.default_rng(config.seed + 770001)
+    turnover_p = (
+        1.0 / (config.investor_turnover_mean_years * 252.0)
+        if config.investor_turnover_mean_years > 0.0 else 0.0
+    )
+    # 退出中カウントダウン (>0 の間は毎日一定割合で強制清算し、0到達で交代)
+    exit_countdown = torch.zeros(n_inv, device=device)
+    exit_liq_rate = 3.0 / max(config.investor_exit_liq_days, 1.0)  # 期間終了時に残 ~5%
 
     firm_vol = torch.full((n,), config.idio_vol, device=device)
     market_var        = config.market_vol ** 2
@@ -657,10 +674,42 @@ def simulate_market_gpu(
         buy_orders  = buy_mask.float()  * cash.unsqueeze(1) * size_frac           # (n_inv, n)
         sell_orders = sell_mask.float() * holdings * firm_prices.unsqueeze(0) * size_frac
 
+        # キャパシティ制約 (大口の執行制約): 平均を超える富シェアの投資家は
+        # 富の小さい割合しか日々動かさない (実市場の大規模ファンドの執行制約)。
+        # 富の凝縮による金額imbalanceの飽和と、複利加速の両方を創発的に抑える。
+        # 売り側は別γ (ファイアセールの非対称 = leverage 効果の増幅源)。
+        if config.whale_size_power > 0.0:
+            _wealth_now = cash + (holdings * firm_prices.unsqueeze(0)).sum(dim=1)
+            _share_rel = torch.clamp(
+                _wealth_now * n_inv / torch.clamp(_wealth_now.sum(), min=1e-12), min=1.0)
+            buy_orders = buy_orders * (_share_rel ** (-config.whale_size_power))[:, None]
+            _gs = (config.whale_size_power_sell
+                   if config.whale_size_power_sell >= 0.0 else config.whale_size_power)
+            # 状態依存ファイアセール: 下方ストレスが高い局面ほど売り制約を解除
+            # (平時=ラチェット抑制、危機=大口の投げ売り → leverage 増幅)
+            if config.whale_fire_sale_relief > 0.0:
+                _ratio = down_var_ewma / (realized_var_ewma / 2.0 + 1e-12)
+                _fire01 = float(np.clip(
+                    (_ratio - config.whale_fire_thresh) / config.whale_fire_width, 0.0, 1.0))
+                _gs = _gs * (1.0 - config.whale_fire_sale_relief * _fire01)
+            if _gs > 0.0:
+                sell_orders = sell_orders * (_share_rel ** (-_gs))[:, None]
+
         # キャッシュ制約
         total_buy = buy_orders.sum(dim=1)  # (n_inv,)
         scale = torch.where(total_buy > cash, cash / (total_buy + 1e-12), torch.ones_like(cash))
         buy_orders = buy_orders * scale.unsqueeze(1)
+
+        # 資本回転: 退出中の投資家は買いを止め、保有を毎日一定割合で市場に清算
+        # (即時消滅だと売り供給が瞬間蒸発し買い圧が対向を失って暴騰を誘発する)
+        if turnover_p > 0.0:
+            _exiting = exit_countdown > 0
+            if bool(_exiting.any().item()):
+                buy_orders[_exiting] = 0.0
+                sell_orders[_exiting] = (
+                    sell_orders[_exiting]
+                    + holdings[_exiting] * firm_prices.unsqueeze(0) * exit_liq_rate
+                )
 
         buy_value  = buy_orders.sum(dim=0)   # (n,)
         sell_value = sell_orders.sum(dim=0)  # (n,)
@@ -975,6 +1024,14 @@ def simulate_market_gpu(
         lam_rv = config.realized_vol_lambda
         # 内部動態 (ボラ推定・恐怖メカニズム) は生リターンで更新
         realized_var_ewma = lam_rv * realized_var_ewma + (1.0 - lam_rv) * (sp_ret_raw ** 2)
+        # ボラEWMAの固定アンカーへの平均回帰: 正フィードバックによる平穏ボラ床の
+        # 経年ラチェット上昇を止める (realized_vol_anchor_pull>0 で有効)。
+        if config.realized_vol_anchor_pull > 0.0:
+            _tgt = config.realized_vol_anchor ** 2
+            realized_var_ewma = (
+                (1.0 - config.realized_vol_anchor_pull) * realized_var_ewma
+                + config.realized_vol_anchor_pull * _tgt
+            )
         prev_market_vol_t = float(np.sqrt(max(realized_var_ewma, 1e-10)))
         x_prev = x.clone()
 
@@ -1017,6 +1074,75 @@ def simulate_market_gpu(
         if config.jump_aftershock2_scale > 0.0:
             aftershock2_state = config.jump_aftershock2_decay * aftershock2_state + jump_abs
         prev_sp_ret = sp_ret_raw
+
+        # ---- 投資家の資本回転 (退出発火 → 段階的清算 → 新規参入と交代) ----
+        if turnover_p > 0.0:
+            # 発火: 幾何寿命。既に退出中の投資家は発火しない
+            _fired = torch.from_numpy(
+                (turnover_rng.random(n_inv) < turnover_p)
+            ).to(device) & (exit_countdown <= 0)
+            if bool(_fired.any().item()):
+                exit_countdown[_fired] = float(config.investor_exit_liq_days)
+            # カウントダウンと交代 (清算完了者)
+            _was_exiting = exit_countdown > 0
+            exit_countdown = torch.clamp(exit_countdown - 1.0, min=0.0)
+            _done = _was_exiting & (exit_countdown <= 0)
+            _rep = torch.nonzero(_done).flatten().cpu().numpy()
+            if len(_rep) > 0:
+                k_rep = len(_rep)
+                idx = torch.from_numpy(_rep).to(device)
+                # 退出: 旧投資家はポートフォリオごと市場のアクティブ売買から離脱
+                #       (凝縮解消の主役はホエールの退出)。
+                # 参入: 現金のみ (保有0)。規模は既存投資家の「現金」中央値スケール
+                #       (=実際の買い余力。富の中央値にすると退出済み売り圧との
+                #        非対称でネット買い資金が複利注入され価格が指数発散する)。
+                med_c = float(cash.median().item())
+                entry_cash = (
+                    med_c * config.investor_entry_cash_frac
+                    * np.exp(turnover_rng.normal(0.0, config.wealth_sigma, size=k_rep))
+                )
+                entry_cash = np.clip(
+                    entry_cash, med_c * config.wealth_clip_min, med_c * config.wealth_clip_max
+                )
+                cash[idx] = torch.tensor(entry_cash, dtype=torch.float32, device=device)
+                holdings[idx] = 0.0
+                # 行動パラメータの再ドロー (新しい投資家)
+                def _t(a):
+                    return torch.tensor(a, dtype=torch.float32, device=device)
+                vol_sens_t[idx] = _t(np.clip(
+                    turnover_rng.normal(config.vol_sensitivity_mean,
+                                        config.vol_sensitivity_std, size=k_rep), -2.0, 3.0))
+                risk_tol_t[idx] = _t(turnover_rng.lognormal(mean=-2.6, sigma=0.35, size=k_rep))
+                trend_wt[idx] = _t(turnover_rng.normal(
+                    config.trend_weight_mean, config.trend_weight_std, size=k_rep))
+                value_wt[idx] = _t(turnover_rng.normal(1.00, 0.25, size=k_rep))
+                unc_aversion[idx] = _t(turnover_rng.uniform(0.15, 0.75, size=k_rep))
+                rate_sens[idx] = _t(turnover_rng.uniform(0.02, 0.18, size=k_rep))
+                temperature_t[idx] = _t(turnover_rng.uniform(2.0, 6.0, size=k_rep))
+                loss_asym[idx] = _t(turnover_rng.uniform(1.0, 1.9, size=k_rep))
+                _phi_new = np.clip(turnover_rng.normal(0.72, 0.07, size=k_rep), 0.50, 0.90)
+                belief_phi_t[idx] = _t(_phi_new)
+                _max_rho = np.clip(0.97 - _phi_new, 0.0, None)
+                belief_rho_s_t[idx] = _t(np.minimum(
+                    np.clip(turnover_rng.normal(0.18, 0.06, size=k_rep), 0.04, 0.30), _max_rho))
+                belief_rho_h_t[idx] = _t(np.minimum(
+                    np.clip(turnover_rng.normal(0.28, 0.08, size=k_rep), 0.10, 0.52), _max_rho))
+                # 派生テンソル rho_per_dim も再構築 (信念再帰の実体はこちら。
+                # 更新漏れだと新phi+旧rho>0.97 で float32 発散する)
+                rho_per_dim[idx] = torch.where(
+                    torch.arange(d, device=device) < (n_pub + n_sec),
+                    belief_rho_s_t[idx].unsqueeze(1).expand(k_rep, d),
+                    belief_rho_h_t[idx].unsqueeze(1).expand(k_rep, d),
+                )
+                obs_var_t[idx] = _t(turnover_rng.lognormal(
+                    mean=np.log(0.055**2), sigma=0.45, size=k_rep))
+                proc_var_t[idx] = _t(turnover_rng.lognormal(
+                    mean=np.log(0.022**2), sigma=0.45, size=k_rep))
+                # 信念とストレスは白紙から
+                belief_state[idx] = _t(
+                    turnover_rng.standard_normal((k_rep, n, d)) * 0.010)
+                if stress_hetero:
+                    investor_stress_state_t[idx] = 0.0
 
     firms_df = pd.DataFrame({
         "firm_id": np.arange(n),

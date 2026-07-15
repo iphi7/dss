@@ -1,0 +1,17 @@
+device cuda
+running Z01_gs025 1
+running Z01_gs025 2
+running Z01_gs025 3
+running Z02_gs010 1
+running Z02_gs010 2
+running Z02_gs010 3
+running Z03_gs000 1
+running Z03_gs000 2
+running Z03_gs000 3
+    label  score_mean  std_sp500_mean  kurt_sp500_mean  abs_acf1_mean  abs_acf5_mean  sq_acf1_mean  sq_acf5_mean  abs_q0999_mean  lev_dec10_5d_mean  lev_dec10_10d_mean  lev_mid_5d_mean  rc_q05_mean  rc_q95_mean  dy_std_mean
+Z01_gs025    0.384217        0.011256        24.792437       0.254251       0.175153      0.211847      0.129517        0.080949          -0.156573           -0.147619        -0.046217    -0.415758     0.733451     0.069736
+Z02_gs010    0.311694        0.013979        14.121424       0.307608       0.244305      0.239402      0.163419        0.082630          -0.201755           -0.178319        -0.078042    -0.481485     0.819573     0.072139
+Z03_gs000    0.315162        0.015634        10.796786       0.306101       0.242245      0.241661      0.170430        0.085554          -0.209096           -0.198105        -0.104008    -0.522085     0.825727     0.074518
+
+REAL TARGET
+{'std_sp500': 0.0105, 'kurt_sp500': 21.7534, 'abs_acf1': 0.2614, 'abs_acf5': 0.289, 'sq_acf1': 0.2298, 'sq_acf5': 0.228, 'abs_q0999': 0.0704, 'lev_dec10_5d': -0.2089, 'lev_dec10_10d': -0.1756, 'lev_mid_5d': -0.1094, 'rc_q05': -0.5675, 'rc_q95': 0.5806, 'dy_std': 0.0667}

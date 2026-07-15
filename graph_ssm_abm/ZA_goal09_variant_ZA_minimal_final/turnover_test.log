@@ -1,0 +1,24 @@
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+--- turnover 20年 (std 0.64%  freq>50% 0.00%  成長 nan%) ---
+  66-85: HHI 0.051 (実効19.6人)  |imbal| 0.34  床 0.54%
+  86-05: HHI nan (実効nan人)  |imbal| nan  床 nan%
+  06-25: HHI nan (実効nan人)  |imbal| nan  床 nan%
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+--- turnover 10年 (std 0.62%  freq>50% 0.00%  成長 nan%) ---
+  66-85: HHI 0.048 (実効21.1人)  |imbal| 0.36  床 0.52%
+  86-05: HHI nan (実効nan人)  |imbal| nan  床 nan%
+  06-25: HHI nan (実効nan人)  |imbal| nan  床 nan%

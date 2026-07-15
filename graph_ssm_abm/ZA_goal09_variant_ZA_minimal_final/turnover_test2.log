@@ -1,0 +1,25 @@
+NANPROBE t= 1433 imbal_nan True common 0.006611957295071629 impact 1.0 anchor 0.00048796891867622946 fund_nan False noise_nan False cash_nan True cash_max nan hold_nan True hold_max nan fp_nan True w_nan True buyv_nan True sellv_nan True
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+--- turnover 20年 (std 0.64%  freq>50% 0.00%  成長 nan%) ---
+  66-85: HHI 0.062 (実効16.3人)  |imbal| 0.37  床 0.54%
+  86-05: HHI nan (実効nan人)  |imbal| nan  床 nan%
+  06-25: HHI nan (実効nan人)  |imbal| nan  床 nan%
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+/home/u00121/.venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1241: RuntimeWarning: Mean of empty slice
+  return np.nanmean(a, axis, out=out, keepdims=keepdims)
+--- turnover 10年 (std 0.63%  freq>50% 0.00%  成長 nan%) ---
+  66-85: HHI 0.072 (実効13.8人)  |imbal| 0.43  床 0.54%
+  86-05: HHI nan (実効nan人)  |imbal| nan  床 nan%
+  06-25: HHI nan (実効nan人)  |imbal| nan  床 nan%
